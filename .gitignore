@@ -65,4 +65,38 @@ jyx.py
 **/checkpoints/
 **/best_models/
 **/final_models/
-**/testing/
+**/testing/__pycache__/
+.ipynb_checkpoints/
+wandb/
+outputs/
+runs/
+*.pt
+*.h5
+*.npz
+*.npy
+
+# --- Experiments: generated media/results/logs (FlowDAS) ---
+# Media from runs
+*.mp4
+*.gif
+# (Uncomment to ignore result images too)
+# *.png
+
+# Experiment outputs
+experiments/**/output/**
+experiments/**/results/**
+
+# SLURM logs
+experiments/**/slurm/*.out
+experiments/**/slurm/*.err
+experiments/**/slurm/**/*.out
+experiments/**/slurm/**/*.err
+experiments/**/slurm_scripts/*.out
+experiments/**/slurm_scripts/*.err
+experiments/**/slurm_scripts/**/*.out
+experiments/**/slurm_scripts/**/*.err
+
+# (Optional) ignore all notebooks; uncomment if desired, then whitelist the few you want
+# *.ipynb
+# !experiments/lorenz/CheckDataAndResults.ipynb
+# !<add/other/notebooks/you/want>.ipynb

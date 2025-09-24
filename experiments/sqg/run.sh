@@ -1,0 +1,11 @@
+python train.py \
+  --train_data_path /central/scratch/sotakao/sqg_train_data/3hrly/sqg_pv_train.h5 \
+  --val_data_path /central/scratch/sotakao/sqg_train_data/3hrly/sqg_pv_valid.h5 \
+  --window 7 \
+  --batch_size 32 \
+  --C 2 --H 64 --W 64 \
+  --epochs 1000 \
+  --lr 2e-4 \
+  --ckpt_path ./checkpoints/latest.pt \
+  --use_wandb 1 \
+  --scheduler cosine
