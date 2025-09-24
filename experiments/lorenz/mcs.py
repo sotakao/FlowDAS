@@ -23,6 +23,7 @@ References:
 
 import abc
 import torch
+import numpy as np
 from torch import Tensor, Size
 from torch.distributions import Normal, MultivariateNormal
 from typing import *
@@ -260,8 +261,27 @@ class TrajectoryDatasetV2(Dataset):
     def __len__(self) -> int:
         return len(self.data)
 
+    def _to_torch(self, arr_like, dtype=np.float32):
+        # 1) materialize as a real ndarray with desired dtype
+        arr = np.asarray(arr_like, dtype=dtype)
+    
+        # 2) ensure writable + C-contiguous (HDF5 slices are often read-only)
+        if (not arr.flags['C_CONTIGUOUS']) or (not arr.flags['WRITEABLE']):
+            arr = arr.copy(order='C')  # makes it contiguous & writeable
+    
+        # 3) try zero-copy; if PyTorch still complains, fall back to copy
+        try:
+            return torch.from_numpy(arr)
+        except TypeError:
+            # last resort—copy into a fresh tensor (handles weird subclasses)
+            return torch.tensor(arr, dtype=torch.float32)
+
     def __getitem__(self, i: int) -> Tuple[Tensor, Dict]:
-        x = torch.from_numpy(self.data[i]) # (L, 3)
+        # arr = self.data[i][...]                 # materialize to a real np.ndarray
+        # arr = np.ascontiguousarray(arr, dtype=np.float32)  # ensure C-contiguous, float32
+        # x = torch.from_numpy(arr) # (L, 3)
+        arr = self.data[i][...]            # shape e.g. (L, 3)
+        x = self._to_torch(arr, dtype=np.float32)
 
         if self.window is not None:
             assert isinstance(self.window, int), "window must be an integer"

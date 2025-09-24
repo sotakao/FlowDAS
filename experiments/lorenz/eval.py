@@ -16,6 +16,22 @@ import matplotlib.pyplot as plt
 from glob import glob
 
 
+def _to_torch(arr_like, dtype=np.float32):
+    # 1) materialize as a real ndarray with desired dtype
+    arr = np.asarray(arr_like, dtype=dtype)
+
+    # 2) ensure writable + C-contiguous (HDF5 slices are often read-only)
+    if (not arr.flags['C_CONTIGUOUS']) or (not arr.flags['WRITEABLE']):
+        arr = arr.copy(order='C')  # makes it contiguous & writeable
+
+    # 3) try zero-copy; if PyTorch still complains, fall back to copy
+    try:
+        return torch.from_numpy(arr)
+    except TypeError:
+        # last resort—copy into a fresh tensor (handles weird subclasses)
+        return torch.tensor(arr, dtype=torch.float32)
+        
+
 def visualize(config):
     """
     Visualize the ground truth and estimated trajectories from h5 files.
@@ -117,7 +133,9 @@ def create_observations(config):
     # Check if the observation file already exists
     if os.path.exists(obs_file_path):
         # Generate what the new observations would be
-        x_tensor = torch.from_numpy(x)
+        arr = x[...]
+        x_tensor = _to_torch(arr)
+        # x_tensor = torch.from_numpy(x)
         new_obs = observation_generator(x_tensor, config['sigma_obs_hi'])
         
         # Load existing observations
@@ -135,9 +153,11 @@ def create_observations(config):
     else:
         # Create new observations file
         with h5py.File(obs_file_path, mode='w') as f:
-            x_tensor = torch.from_numpy(x)
+            arr = x[...]
+            x_tensor = _to_torch(arr)
+            # x_tensor = torch.from_numpy(x)
             obs = observation_generator(x_tensor, config['sigma_obs_hi'])
-            f.create_dataset('obs', data=obs)
+            f.create_dataset('obs', data=obs.detach().cpu().numpy())
             logging.info(f"Created new observations file at {obs_file_path}")
 
     logging.info("Observations created successfully.\n\n")
@@ -184,13 +204,17 @@ def run_evaluation(config):
 
         # Ground truth
         with h5py.File(f'{path_dataset}/test.h5', mode='r') as f:
-            gt = torch.from_numpy(f['data'][n]).to(config['device']) 
+            arr = f['data'][n][...]
+            gt = _to_torch(arr).to(config['device']) 
+            # gt = torch.from_numpy(f['data'][n]).to(config['device']) 
             gt = gt[:config['LT']+config['window']] # shape: (L+1, 3)
 
         # Observation
         with h5py.File(f'{path_dataset}/obs_L{config["LT"]}_win{config["window"]}.h5', mode='r') as f:
             # TODO: deal with window size.
-            obs = torch.from_numpy(f['obs'][n]).to(config['device']) # shape: (L+1, 1)
+            arr = f['obs'][n][...]
+            obs = _to_torch(arr).to(config['device']) 
+            # obs = torch.from_numpy(f['obs'][n]).to(config['device']) # shape: (L+1, 1)
 
         flow_prior = get_flow_prior(config)
 

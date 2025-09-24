@@ -71,7 +71,7 @@ class Trainer:
             self.dataloader = get_cifar_dataloader(c)
 
         elif c.dataset == 'sevir':
-            config_sevir = {'dataset_name': 'sevirlr', 'img_height': 128, 'img_width': 128, 'in_len': 6, 'out_len': self.auto_step, 'seq_len':  6 + self.auto_step, 'plot_stride': 1, 'interval_real_time': 10, 'sample_mode': 'sequent', 'stride': 6, 'layout': 'NTHWC', 'start_date': None, 'train_test_split_date': [2019, 6, 1], 'end_date': None, 'val_ratio': 0.1, 'metrics_mode': '0', 'metrics_list': ['csi', 'pod', 'sucr', 'bias'], 'threshold_list': [16, 74, 133, 160, 181, 219], 'aug_mode': '2', 'sevir_dir': self.data_fname, 'batch_size':50, 'sample_only':c.sample_only, 'num_workers': 16,}
+            config_sevir = {'dataset_name': 'sevirlr', 'img_height': 128, 'img_width': 128, 'in_len': 6, 'out_len': self.auto_step, 'seq_len':  6 + self.auto_step, 'plot_stride': 1, 'interval_real_time': 10, 'sample_mode': 'sequent', 'stride': 6, 'layout': 'NTHWC', 'start_date': None, 'train_test_split_date': [2019, 6, 1], 'end_date': None, 'val_ratio': 0.1, 'metrics_mode': '0', 'metrics_list': ['csi', 'pod', 'sucr', 'bias'], 'threshold_list': [16, 74, 133, 160, 181, 219], 'aug_mode': '2', 'sevir_dir': config.data_fname, 'batch_size':50, 'sample_only':c.sample_only, 'num_workers': 16,}
             self.dataloader, old_pixel_norm, new_pixel_norm = new_get_forecasting_dataloader_4train_sevir(config_sevir)
             c.old_pixel_norm = old_pixel_norm
             c.new_pixel_norm = new_pixel_norm
@@ -578,7 +578,7 @@ class Config:
             self.EM_sample_steps = 10
             self.sample_every = 10
             self.print_loss_every = 10
-            self.save_every = 10000000
+            self.save_every = 10_000_000
         else:
             self.sample_every = 1000
             self.print_loss_every = 100 #1000 

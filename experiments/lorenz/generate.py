@@ -50,7 +50,7 @@ def simulate(dataset_idx: int, config: dict):
 
     for name, data in splits.items():
         with h5py.File(dataset_dir / f'{name}.h5', mode='w') as f:
-            f.create_dataset('data', data=data, dtype=np.float32)
+            f.create_dataset('data', data=data.detach().cpu().numpy(), dtype=np.float32)
     
     # Log the parameters
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

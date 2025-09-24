@@ -14,3 +14,4 @@ x_dim: 3
 use_bn: False
 save_interval: 500  # Save checkpoint every N epochs
 prev_stats_as_cond: True
+study_Mem_Gen: False

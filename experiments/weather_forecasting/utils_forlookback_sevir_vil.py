@@ -27,7 +27,7 @@ import numpy as np
 from torch.utils.data import Dataset as TorchDataset, DataLoader, random_split
 from torchvision import transforms
 from einops import rearrange
-from lightning import LightningDataModule, seed_everything
+from pytorch_lightning import LightningDataModule, seed_everything
 from sevir_dataloader import SEVIRDataLoader
 
 from matplotlib import pyplot as plt

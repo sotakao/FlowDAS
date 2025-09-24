@@ -69,7 +69,30 @@ class Trainer:
             self.dataloader = get_cifar_dataloader(c)
 
         elif c.dataset == 'sevir':
-            config_sevir = {'dataset_name': 'sevirlr', 'img_height': 128, 'img_width': 128, 'in_len': 6, 'out_len': 1, 'seq_len': 7, 'plot_stride': 1, 'interval_real_time': 10, 'sample_mode': 'sequent', 'stride': 6, 'layout': 'NTHWC', 'start_date': None, 'train_test_split_date': [2019, 6, 1], 'end_date': None, 'val_ratio': 0.1, 'metrics_mode': '0', 'metrics_list': ['csi', 'pod', 'sucr', 'bias'], 'threshold_list': [16, 74, 133, 160, 181, 219], 'aug_mode': '2', 'sevir_dir':c.data_fname, 'batch_size':100, 'sample_only':c.sample_only, 'num_workers': 8,}
+            config_sevir = {'dataset_name': 'sevirlr',
+                            'img_height': 128,
+                            'img_width': 128,
+                            'in_len': 6,
+                            'out_len': 1,
+                            'seq_len': 7,
+                            'plot_stride': 1,
+                            'interval_real_time': 10,
+                            'sample_mode': 'sequent',
+                            'stride': 6,
+                            'layout': 'NTHWC',
+                            'start_date': None,
+                            'train_test_split_date': [2019, 6, 1],
+                            'end_date': None,
+                            'val_ratio': 0.1,
+                            'metrics_mode': '0',
+                            'metrics_list': ['csi', 'pod', 'sucr', 'bias'],
+                            'threshold_list': [16, 74, 133, 160, 181, 219],
+                            'aug_mode': '2',
+                            'sevir_dir': c.data_fname,
+                            'batch_size': 16,
+                            'sample_only': c.sample_only,
+                            'num_workers': 2,}
+            
             self.dataloader, old_pixel_norm, new_pixel_norm = new_get_forecasting_dataloader_4train_sevir(config_sevir)
             print('dataset volumn', self.dataloader)
             
@@ -441,7 +464,6 @@ class Trainer:
         ##TODO: here is the sampling process
 
     def do_step(self, batch_idx, batch):
-
         D = self.prepare_batch(batch)
         # d_z0_his.append(D['z0'])
         # if len(d_z0_his)>2:
@@ -556,7 +578,7 @@ class Config:
             self.EM_sample_steps = 10
             self.sample_every = 10
             self.print_loss_every = 10
-            self.save_every = 10000000
+            self.save_every = 10_000_000
         else:
             self.sample_every = 1000
             self.print_loss_every = 100 #1000 
@@ -570,7 +592,7 @@ class Config:
         self.t_max_train = 1.0
         self.max_grad_norm = 1.0
         self.base_lr = 2e-4
-        self.max_steps = 10000000
+        self.max_steps = 10_000_000
         
         # arch
         self.unet_use_classes = True if self.dataset == 'cifar' else False
