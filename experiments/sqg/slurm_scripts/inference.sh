@@ -30,12 +30,12 @@ python inference2.py --data_dir /central/scratch/sotakao/sqg_train_data \
                      --train_file sqg_pv_train.h5 \
                      --hrly_freq 3 \
                      --obs_pct 0.25 \
-                     --obs_fn linear \
-                     --obs_sigma 0.3 \
+                     --obs_fn exp_scaled \
+                     --obs_sigma 1.0 \
                      --guidance_strength 1.0 \
                      --guidance_method DPS \
                      --n_ens 20 \
                      --log_wandb 1 \
-                     --true_initial 0 \
+                     --true_initial 1 \
                      --mc_samples 1 \
                      --em_steps 200
