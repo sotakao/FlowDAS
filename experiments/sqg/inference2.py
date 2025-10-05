@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 # your local UNet (unchanged)
 from models import DriftModel, Interpolant
-from utils import OBS_FNS, save_spectrum, save_video
+from utils import OBS_FNS, save_spectrum, save_video, cg, gmres
 from metrics import rmse, crps_ens, spread_skill_ratio
 
 
@@ -40,13 +40,14 @@ def _roll_cond(cond: torch.Tensor, new_frame: torch.Tensor, C: int) -> torch.Ten
     return torch.cat([cond[:, C:], new_frame], dim=1)
 
 
-def dps_x1_hat(drift, interp, x, t, cond, scale, device):
+def dps_x1_hat(drift, interp, x0, x, t, cond, scale, device):
     tb = t.repeat(x.shape[0]).to(device)
     # denom = interp.beta(tb) * interp.alpha_dot(tb) - interp.alpha(tb) * interp.beta_dot(tb)
     # x1_hat = (scale * interp.beta(tb) * drift(x/scale, tb, cond=cond/scale) \
     #            - interp.beta_dot(tb) * x) / denom
     denom = interp.sigma(tb) * interp.beta_dot(tb) - interp.beta(tb) * interp.sigma_dot(tb)
-    x1_hat = (interp.sigma(tb) * drift(x/scale, tb, cond=cond/scale) - interp.sigma_dot(tb) * x) / denom
+    fac = interp.alpha_dot(tb) * interp.sigma(tb) - interp.alpha(tb) * interp.sigma_dot(tb)
+    x1_hat = (interp.sigma(tb) * drift(x/scale, tb, cond=cond/scale) - interp.sigma_dot(tb) * x - fac * x0) / denom
     return x1_hat
 
 
@@ -56,6 +57,7 @@ def em_sample_conditioned(
     xt,            # (B,C,H,W) current state, will be *updated* and returned
     cond,          # (B,(T-1)C,H,W) conditioner
     y_obs,         # (B,C,H,W) observation at this step (normalized same as training)
+    obs_std,
     operator,      # differentiable measurement operator, e.g., lambda x: x * mask
     *,
     steps=200, t_min=0.0, t_max=0.999,
@@ -64,12 +66,14 @@ def em_sample_conditioned(
     data_scale=1.0, # scaling between physical and normalized units
     verbose=False,
     guidance_method='MC',
+    solver_iterations=1, # Used in MMPS
 ):
     """
     One assimilation window: runs an EM-like sampler from t_min..t_max conditioned on y_obs.
     Returns the final xt (detached).
     """
     device = xt.device
+    x0 = xt.clone()
     ts = torch.linspace(t_min, t_max, steps, device=device)
     dt = float(ts[1] - ts[0])
 
@@ -111,12 +115,40 @@ def em_sample_conditioned(
                 # losses.append(0.5 * err.pow(2).sum(dim=(1,2,3)).mean())
 
             loss_meas = torch.stack(losses).mean()
+            grad_outputs = None
         elif guidance_method.lower() == 'dps':
-            x1_hat = dps_x1_hat(drift, interp, xt, t, cond, data_scale, device)
+            x1_hat = dps_x1_hat(drift, interp, x0, xt, t, cond, data_scale, device)
             meas = operator(x1_hat)
             loss_meas = torch.linalg.vector_norm(meas - y_obs)
+            grad_outputs = None
+        elif guidance_method.lower() == 'mmps':
+            tb = t.repeat(xt.shape[0]).to(device)
+            sigma, beta = interp.sigma(tb), interp.beta(tb)
+            x1_hat = dps_x1_hat(drift, interp, x0, xt, t, cond, data_scale, device)
+            meas = operator(x1_hat)
+            
+            def A(v):
+                if hasattr(torch, "func") and hasattr(torch.func, "jvp"):
+                    return torch.func.jvp(operator, (x1_hat.detach(),), (v,))[1]
+                else:
+                    return torch.autograd.functional.jvp(operator, (x1_hat.detach(),), (v,), create_graph=False)[1]
+            
+            def At(v):
+                return torch.autograd.grad(meas, x1_hat, v, retain_graph=True)[0]
 
-        grad_xt = torch.autograd.grad(loss_meas, xt, retain_graph=False, create_graph=False)[0]
+            def cov_x(v):
+                return sigma**2/beta * torch.autograd.grad(x1_hat, xt, v, retain_graph=True)[0] 
+
+            def cov_y(v):
+                return obs_std**2 * v + A(cov_x(At(v)))
+            
+            grad = y_obs - meas
+            grad = gmres(A=cov_y, b=grad, iterations=solver_iterations)
+
+            loss_meas = meas
+            grad_outputs = grad
+
+        grad_xt = torch.autograd.grad(loss_meas, xt, grad_outputs, retain_graph=False, create_graph=False)[0]
 
         # EM update
         mu  = xt + bF * dt
@@ -145,6 +177,7 @@ def sequential_assimilate(
     x0: torch.Tensor,         # (B,C,H,W) initial state (e.g., last frame of history)
     cond: torch.Tensor,       # (B,(T-1)C,H,W) time-flattened past
     y_seq: torch.Tensor,      # (B,N,C,H,W) observations for times 1..N (normalized)
+    obs_std: float,
     operator,                 # callable on (B,C,H,W) -> (B,C,H,W) (e.g., fixed mask)
     *,
     steps_per_obs=200,
@@ -156,7 +189,8 @@ def sequential_assimilate(
     gt_future: Optional[torch.Tensor] = None,  # (N,C,H,W) in PV units
     scalefact: Optional[float] = None,         # scalar
     plot_every: int = 20,
-    guidance_method: str = 'MC'
+    guidance_method: str = 'MC',
+    solver_iterations: int =1, # Used in MMPS
 ):
     """
     Runs N assimilation windows, one per observation y_seq[:,i], starting from z0.
@@ -175,12 +209,13 @@ def sequential_assimilate(
         xt = em_sample_conditioned(
             drift=drift, interp=interp,
             xt=xt, cond=cond, 
-            y_obs=y_obs_i, operator=operator,
+            y_obs=y_obs_i, obs_std=obs_std, operator=operator,
             steps=steps_per_obs, guide=guide, noise_scale=noise_scale,
             mc_samples=mc_samples, second_order=second_order,
             data_scale=data_scale,
             guidance_method=guidance_method,
-            verbose=False
+            verbose=False,
+            solver_iterations=solver_iterations,
         )
         preds.append(xt.unsqueeze(1))  # (B,1,C,H,W)
 
@@ -237,6 +272,7 @@ def parse_args():
     p.add_argument("--n_ens", type=int, default=20)
     p.add_argument("--guidance_method", type=str, default="DPS")
     p.add_argument("--guidance_strength", type=float, default=1.0)
+    p.add_argument("--solver_iterations", type=int, default=1) # Used in MMPS
     p.add_argument("--mc_samples", type=int, default=1)
     p.add_argument("--em_steps", type=int, default=200)
     # Checkpoint + output
@@ -248,7 +284,7 @@ def parse_args():
     p.add_argument("--plot_every", type=int, default=20)  # match assimilate.py behavior
     # Debug
     p.add_argument("--debug_parity", action="store_true", help="Print first-step invariants and exit.")
-    p.add_argument("--true_initial", type=int, default=0, help="Use true initial conditions.")
+    p.add_argument("--true_initial", type=int, default=1, help="Use true initial conditions.")
     # p.add_argument("--no_lookahead", type=int, default=0, help="Use current x for guidance as opposed to x_hat in DPS.")
     return p.parse_args()
 
@@ -323,6 +359,8 @@ def main():
         B_ens = int(args.n_ens)
         C_ch  = hist_phys.shape[1]
         ny, nx = hist_phys.shape[-2:]
+        hist_phys = hist_phys + 0.1*torch.randn_like(hist_phys)
+        x0_phys_1 = x0_phys_1 + 0.1*torch.randn_like(x0_phys_1)
 
         # cond: flatten time into channels and replicate across ensemble
         cond = (hist_phys.unsqueeze(0)                         # (1, W-1, C, H, W)
@@ -404,7 +442,8 @@ def main():
         wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
-            name=f"FlowDAS_SQG_win{args.window}_{args.obs_fn}_{args.obs_pct}pct_g{args.guidance_strength}" + ("_GTinit" if args.true_initial else "_SDAinit") + f"_{args.guidance_method}",
+            name=f"FlowDAS_SQG_win{args.window}_{args.obs_fn}_{args.obs_pct}pct\
+                   _g{args.guidance_strength}_{args.em_steps}steps" + ("_GTinit" if args.true_initial else "_SDAinit") + f"_{args.guidance_method}",
             config=vars(args),
         )
 
@@ -413,6 +452,7 @@ def main():
         x0=x0,                      # (1,C,H,W) @ t = W-1
         cond=cond,                  # (1,(W-1)*C,H,W) = frames 0..W-2
         y_seq=y_star,               # (N, C, H, W) = frames W..T-1
+        obs_std=args.obs_sigma,
         operator=A_model,
         steps_per_obs=args.em_steps,
         guide=args.guidance_strength,
@@ -427,6 +467,7 @@ def main():
         # no_lookahead=bool(args.no_lookahead),
         mc_samples=args.mc_samples,
         guidance_method=args.guidance_method,
+        solver_iterations=args.solver_iterations,
     )                                # -> (1, N, C, H, W)
 
     posterior_time_first = torch.swapaxes(posterior_samples, 0, 1)  # (T,B,C,H,W)

@@ -135,6 +135,136 @@ def make_scheduler(optimizer, *, scheduler: str, total_steps: int,
         raise ValueError(f"Unknown scheduler: {scheduler}")
 
 
+################################# utils for MMPS #################################
+# Linear system solvers (moved from sda/utils.py)
+
+def cg(
+    A: Callable[[Tensor], Tensor],
+    b: Tensor,
+    x0: Optional[Tensor] = None,
+    iterations: int = 1,
+    dtype: Optional[torch.dtype] = None,
+) -> Tensor:
+    r"""Solves a linear system Ax = b with conjugate gradient (CG) iterations."""
+    if dtype is None:
+        dtype = torch.float64
+
+    epsilon = torch.finfo(dtype).smallest_normal
+
+    if x0 is None:
+        x = torch.zeros_like(b)
+        r = b
+    else:
+        x = x0
+        r = b - A(x0)
+
+    x = x.to(dtype)
+    r = r.to(dtype)
+    rr = torch.einsum("...i,...i", r, r)
+    p = r
+
+    for _ in range(iterations):
+        Ap = A(p.to(b)).to(dtype)
+        pAp = torch.einsum("...i,...i", p, Ap)
+        alpha = rr / torch.clip(pAp, min=epsilon)
+        x_ = x + alpha[..., None] * p
+        r_ = r - alpha[..., None] * Ap
+        rr_ = torch.einsum("...i,...i", r_, r_)
+        beta = rr_ / torch.clip(rr, min=epsilon)
+        p_ = r_ + beta[..., None] * p
+
+        x, r, rr, p = x_, r_, rr_, p_
+
+    return x.to(b)
+
+
+
+def gmres(
+    A: Callable[[Tensor], Tensor],
+    b: Tensor,
+    x0: Optional[Tensor] = None,
+    iterations: int = 1,
+    dtype: Optional[torch.dtype] = None,
+) -> Tensor:
+    r"""Solves a linear system Ax = b with generalized minimal residual (GMRES) iterations."""
+    if dtype is None:
+        dtype = torch.float64
+
+    epsilon = torch.finfo(dtype).smallest_normal
+
+    if x0 is None:
+        r = b
+    else:
+        r = b - A(x0)
+
+    r = r.to(dtype)
+
+    def normalize(x):
+        norm = torch.linalg.vector_norm(x, dim=-1)
+        x = x / torch.clip(norm[..., None], min=epsilon)
+        return x, norm
+
+    def rotation(a, b):
+        c = torch.clip(torch.sqrt(a * a + b * b), min=epsilon)
+        return a / c, -b / c
+
+    V = [None for _ in range(iterations + 1)]
+    B = [None for _ in range(iterations + 1)]
+    H = [[None for _ in range(iterations)] for _ in range(iterations + 1)]
+    cs = [None for _ in range(iterations)]
+    ss = [None for _ in range(iterations)]
+
+    V[0], B[0] = normalize(r)
+
+    for j in range(iterations):
+        v = V[j].to(b)
+        w = A(v).to(dtype)
+
+        # Arnoldi
+        for i in range(j + 1):
+            H[i][j] = torch.einsum("...i,...i", w, V[i])
+            w = w - H[i][j][..., None] * V[i]
+        w, w_norm = normalize(w)
+        H[j + 1][j] = w_norm
+        V[j + 1] = w
+
+        # Givens rotations
+        for i in range(j):
+            tmp = cs[i] * H[i][j] - ss[i] * H[i + 1][j]
+            H[i + 1][j] = cs[i] * H[i + 1][j] + ss[i] * H[i][j]
+            H[i][j] = tmp
+
+        cs[j], ss[j] = rotation(H[j][j], H[j + 1][j])
+        H[j][j] = cs[j] * H[j][j] - ss[j] * H[j + 1][j]
+
+        # Update residual vector
+        B[j + 1] = ss[j] * B[j]
+        B[j] = cs[j] * B[j]
+
+        # Fill trailing zeros
+        for i in range(j + 1, iterations + 1):
+            H[i][j] = torch.zeros_like(H[j][j])
+
+    V, B, H = V[:-1], B[:-1], H[:-1]
+    V = torch.stack(V, dim=-2)
+    B = torch.stack(B, dim=-1)
+    H = torch.stack([torch.stack(Hi, dim=-1) for Hi in H], dim=-2)
+
+    y = torch.linalg.solve_triangular(
+        H + epsilon * torch.eye(iterations, dtype=dtype, device=H.device),
+        B.unsqueeze(dim=-1),
+        upper=True,
+    ).squeeze(dim=-1)
+
+    if x0 is None:
+        x = torch.einsum("...ij,...i", V, y)
+    else:
+        x = x0 + torch.einsum("...ij,...i", V, y)
+
+    return x.to(b)
+
+
+
 # ========================== Dataset =========================================
 class TrajectoryDataset(Dataset):
     def __init__(
